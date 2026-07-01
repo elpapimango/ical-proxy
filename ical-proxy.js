@@ -4,12 +4,13 @@
 /**
  * ical-proxy.js
  *
- * Downloads a remote iCal feed and re-serves it locally over HTTP.
- * Outlook (or any calendar client) can subscribe to the local URL instead
- * of the remote one, with automatic background refreshes.
+ * Downloads one or more remote iCal feeds and re-serves them locally over HTTP.
+ * Outlook (or any calendar client) can subscribe to the local URL(s) instead
+ * of the remote ones, with automatic background refreshes.
  *
  * Usage:
  *   node ical-proxy.js --url <url> [--port 8080] [--interval 30]
+ *   node ical-proxy.js --url1 <url> --url2 <url> [--calendar1 name.ics] [--calendar2 name.ics]
  *   node ical-proxy.js --install  --url <url> [--port 8080] [--interval 30]
  *   node ical-proxy.js --uninstall
  *   node ical-proxy.js --help
@@ -24,11 +25,11 @@ const { URL } = require('url');
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const VERSION       = '1.2.0';
+const VERSION       = '1.3.0';
 const APP_NAME      = 'iCal Proxy';
 const CONFIG_FILE   = path.join(__dirname, 'ical-proxy.config.json');
 const LOG_FILE      = path.join(__dirname, 'ical-proxy.log');
-const CACHE_FILE    = path.join(__dirname, 'ical-proxy.cache.ics'); // persisted across restarts
+const CACHE_FILE    = path.join(__dirname, 'ical-proxy.cache.ics'); // legacy/calendar-1 disk cache path, persisted across restarts
 const MAX_REDIRECTS = 5;
 const FETCH_TIMEOUT = 30_000; // ms
 
@@ -123,11 +124,24 @@ function notify(title, message) {
 
 // ─── Argument Parser ──────────────────────────────────────────────────────────
 
+/**
+ * `--url` is shorthand for `--url1` (single-calendar mode). `--url2`,
+ * `--url3`, ... add more feeds; `--calendarN` sets that feed's local
+ * filename (default `calendarN.ics`). Indices are kept exactly as given
+ * (e.g. a lone `--url3` stays feed #3) rather than being renumbered.
+ */
 function parseArgs(argv = process.argv.slice(2)) {
-  const out = {};
+  const out = { urls: {}, calendarNames: {} };
   for (let i = 0; i < argv.length; i++) {
-    switch (argv[i]) {
-      case '--url':       out.url       = argv[++i]; break;
+    const arg = argv[i];
+    const urlMatch      = arg.match(/^--url(\d+)$/);
+    const calendarMatch = arg.match(/^--calendar(\d+)$/);
+
+    if (arg === '--url')  { out.urls[1] = argv[++i]; continue; }
+    if (urlMatch)         { out.urls[Number(urlMatch[1])] = argv[++i]; continue; }
+    if (calendarMatch)    { out.calendarNames[Number(calendarMatch[1])] = argv[++i]; continue; }
+
+    switch (arg) {
       case '--port':      out.port      = Number(argv[++i]); break;
       case '--interval':  out.interval  = Number(argv[++i]); break;
       case '--install':   out.install   = true; break;
@@ -136,7 +150,7 @@ function parseArgs(argv = process.argv.slice(2)) {
       case '--notify':    out.notify    = true; break;
       case '--debug':     out.debug     = true; break;
       case '--help':
-      case '-h':          out.help      = true; break;
+      case '-h':           out.help      = true; break;
     }
   }
   return out;
@@ -145,8 +159,14 @@ function parseArgs(argv = process.argv.slice(2)) {
 // ─── Config ───────────────────────────────────────────────────────────────────
 
 function buildConfig(args) {
+  const indices = Object.keys(args.urls || {}).map(Number).sort((a, b) => a - b);
+  const calendars = indices.map(idx => ({
+    index:     idx,
+    url:       args.urls[idx],
+    localName: args.calendarNames[idx] || `calendar${idx}.ics`,
+  }));
   return {
-    url:      args.url,
+    calendars,
     port:     Number(args.port)     || 8080,
     interval: Number(args.interval) || 30,
     notify:   args.notify !== false,   // default true; --no-notify sets false
@@ -161,18 +181,30 @@ function saveConfig(cfg) {
 function loadConfig() {
   const raw = fs.readFileSync(CONFIG_FILE, 'utf8');
   const cfg = JSON.parse(raw);
-  if (!cfg.url) throw new Error('Config is missing the required "url" field.');
+
+  // Migrate pre-1.3 config files (flat single-calendar shape: { url, ... })
+  // into the multi-calendar shape so existing installs keep working as-is.
+  if (!cfg.calendars && cfg.url) {
+    cfg.calendars = [{ index: 1, url: cfg.url, localName: 'calendar1.ics' }];
+    delete cfg.url;
+  }
+
+  if (!Array.isArray(cfg.calendars) || cfg.calendars.length === 0) {
+    throw new Error('Config is missing at least one calendar ("calendars" array with a "url").');
+  }
   return cfg;
 }
 
 /**
  * Resolve runtime config with this priority:
- *   1. --url present on CLI  → use CLI args (also save for future service runs)
- *   2. No --url but config.json exists  → load from file, allow port/interval overrides
+ *   1. --url / --urlN present on CLI  → use CLI args (also save for future service runs)
+ *   2. No URLs on CLI but config.json exists  → load from file, allow port/interval/notify overrides
  *   3. Neither  → throw (caller will print help and exit)
  */
 function resolveConfig(args) {
-  if (args.url) {
+  const hasUrls = args.urls && Object.keys(args.urls).length > 0;
+
+  if (hasUrls) {
     const cfg = buildConfig(args);
     saveConfig(cfg);          // Persist so Windows service can read it on restart
     return cfg;
@@ -181,12 +213,12 @@ function resolveConfig(args) {
   if (fs.existsSync(CONFIG_FILE)) {
     const saved = loadConfig();
     const cfg = {
-      url:      saved.url,
-      port:     Number(args.port)     || saved.port     || 8080,
-      interval: Number(args.interval) || saved.interval || 30,
+      calendars: saved.calendars,
+      port:      Number(args.port)     || saved.port     || 8080,
+      interval:  Number(args.interval) || saved.interval || 30,
       // CLI flag wins if present; otherwise fall back to saved value (default true)
-      notify:   args.notify !== undefined ? args.notify
-                  : (saved.notify !== undefined ? saved.notify : true),
+      notify:    args.notify !== undefined ? args.notify
+                   : (saved.notify !== undefined ? saved.notify : true),
     };
     // Persist any overrides
     if (args.port || args.interval || args.notify !== undefined) saveConfig(cfg);
@@ -195,21 +227,22 @@ function resolveConfig(args) {
 
   throw new Error(
     'No iCal URL specified and no saved config found.\n' +
-    'Provide --url <url>, or run with --install --url <url> first.'
+    'Provide --url <url> (or --url1, --url2, ...), or run with --install --url <url> first.'
   );
 }
 
 // ─── Disk Cache ───────────────────────────────────────────────────────────────
 
 /**
- * Write the iCal body to disk so it survives process restarts and is still
+ * Write an iCal body to disk so it survives process restarts and is still
  * available when the external network is unreachable (e.g. VPN disconnected).
+ * Each calendar has its own file (see createCalendarState's `cacheFile`).
  */
-function saveDiskCache(body) {
+function saveDiskCache(filePath, body) {
   try {
-    fs.writeFileSync(CACHE_FILE, body, 'utf8');
+    fs.writeFileSync(filePath, body, 'utf8');
   } catch (e) {
-    logger.warn(`Disk cache write failed: ${e.message}`);
+    logger.warn(`Disk cache write failed (${filePath}): ${e.message}`);
   }
 }
 
@@ -217,53 +250,63 @@ function saveDiskCache(body) {
  * Load a previously saved iCal body from disk.
  * Returns the content string, or null if nothing valid is on disk.
  */
-function loadDiskCache() {
+function loadDiskCache(filePath) {
   try {
-    if (!fs.existsSync(CACHE_FILE)) return null;
-    const body = fs.readFileSync(CACHE_FILE, 'utf8');
+    if (!fs.existsSync(filePath)) return null;
+    const body = fs.readFileSync(filePath, 'utf8');
     // Quick sanity check before trusting the file
     if (body.includes('BEGIN:VCALENDAR')) return body;
-    logger.warn('Disk cache exists but does not look like a valid iCal — ignoring');
+    logger.warn(`Disk cache exists but does not look like a valid iCal — ignoring (${filePath})`);
   } catch (e) {
-    logger.warn(`Disk cache read failed: ${e.message}`);
+    logger.warn(`Disk cache read failed (${filePath}): ${e.message}`);
   }
   return null;
 }
 
 // ─── iCal Fetcher ─────────────────────────────────────────────────────────────
 
-/** In-memory cache holding the last successfully fetched data. */
-const cache = {
-  body:         null,   // string — the raw iCal text
-  etag:         null,   // ETag from last response (for conditional GETs)
-  lastModified: null,   // Last-Modified header value
-  fetchedAt:    null,   // Date of last successful fetch
-  fromDisk:     false,  // true if cache was warm-loaded from disk (not from network)
-};
-
 /**
- * Tracks the most recent fetch error so /status can surface it.
- * Reset to null on every successful fetch.
+ * Build the per-calendar runtime state: in-memory cache, disk cache path, and
+ * the refresh-serialization fields refreshIcal() needs. One of these exists
+ * per configured calendar so N feeds can be polled independently without
+ * racing each other's cache/disk writes.
+ *
+ * Calendar 1 keeps the original `ical-proxy.cache.ics` disk cache filename
+ * for backward compatibility with pre-multi-calendar installs; calendars
+ * 2+ get `ical-proxy.cache<N>.ics`.
  */
-let lastFetchError = null;
-
-/**
- * True while the remote feed is unreachable (connectivity errors).
- * Used to fire a single "network recovered" toast when it comes back,
- * rather than toasting on every failed poll.
- */
-let networkDown = false;
-
-/**
- * Guards against overlapping refreshIcal() runs. The scheduled interval and
- * a manual POST /refresh can otherwise both be in flight at once; whichever
- * network response lands last wins and can stomp a newer result with a
- * stale one (both in the in-memory cache and on disk via saveDiskCache).
- * While a refresh is in progress, additional callers are queued and all
- * get the result of the single in-flight run instead of starting their own.
- */
-let refreshInProgress = false;
-let queuedRefreshCallbacks = [];
+function createCalendarState(index, url, localName) {
+  return {
+    index,
+    url,
+    localName,
+    cacheFile: index === 1
+      ? CACHE_FILE
+      : path.join(__dirname, `ical-proxy.cache${index}.ics`),
+    cache: {
+      body:         null,   // string — the raw iCal text
+      etag:         null,   // ETag from last response (for conditional GETs)
+      lastModified: null,   // Last-Modified header value
+      fetchedAt:    null,   // Date of last successful fetch
+      fromDisk:     false,  // true if cache was warm-loaded from disk (not from network)
+    },
+    // Tracks the most recent fetch error so /status can surface it.
+    // Reset to null on every successful fetch.
+    lastFetchError: null,
+    // True while this feed is unreachable (connectivity errors). Used to
+    // fire a single "network recovered" toast when it comes back, rather
+    // than toasting on every failed poll.
+    networkDown: false,
+    // Guards against overlapping refreshIcal() runs for this calendar. The
+    // scheduled interval and a manual POST /refresh can otherwise both be
+    // in flight at once; whichever network response lands last wins and can
+    // stomp a newer result with a stale one (in-memory and on disk). While a
+    // refresh is in progress, additional callers are queued and all get the
+    // result of the single in-flight run instead of starting their own.
+    refreshInProgress:      false,
+    queuedRefreshCallbacks: [],
+  };
+}
 
 /**
  * Perform a single HTTP/S GET, following redirects.
@@ -334,41 +377,41 @@ function fetchUrl(targetUrl, extraHeaders, redirectsLeft, cb) {
 }
 
 /**
- * Refresh the in-memory cache from the remote iCal URL.
- * Uses conditional GET (ETag / If-Modified-Since) to save bandwidth.
+ * Refresh a single calendar's in-memory cache from its remote URL. Uses
+ * conditional GET (ETag / If-Modified-Since) to save bandwidth.
  *
  * Connectivity errors (VPN down, DNS failure, socket timeout, etc.) are logged
  * at INFO level and do NOT evict the existing cache — Outlook keeps getting the
  * last known-good data until the network comes back.
  *
- * On success the body is also written to disk (CACHE_FILE) so it survives
- * service restarts without needing a network round-trip.
+ * On success the body is also written to disk (state.cacheFile) so it
+ * survives service restarts without needing a network round-trip.
  *
- * @param {string}   sourceUrl
+ * @param {object}   state  — a createCalendarState() instance
  * @param {Function} done(err, updated:boolean)
  */
-function refreshIcal(sourceUrl, done) {
+function refreshIcal(state, done) {
   // Coalesce with an in-flight run instead of starting a second overlapping
-  // fetch — see refreshInProgress comment above.
-  if (refreshInProgress) {
-    queuedRefreshCallbacks.push(done);
+  // fetch — see createCalendarState's refreshInProgress comment.
+  if (state.refreshInProgress) {
+    state.queuedRefreshCallbacks.push(done);
     return;
   }
-  refreshInProgress = true;
+  state.refreshInProgress = true;
 
   const finish = (err, updated) => {
-    refreshInProgress = false;
-    const queued = queuedRefreshCallbacks;
-    queuedRefreshCallbacks = [];
+    state.refreshInProgress = false;
+    const queued = state.queuedRefreshCallbacks;
+    state.queuedRefreshCallbacks = [];
     done(err, updated);
     queued.forEach(cb => cb(err, updated));
   };
 
   const conditionals = {};
-  if (cache.etag)         conditionals['If-None-Match']     = cache.etag;
-  if (cache.lastModified) conditionals['If-Modified-Since'] = cache.lastModified;
+  if (state.cache.etag)         conditionals['If-None-Match']     = state.cache.etag;
+  if (state.cache.lastModified) conditionals['If-Modified-Since'] = state.cache.lastModified;
 
-  fetchUrl(sourceUrl, conditionals, MAX_REDIRECTS, (err, res) => {
+  fetchUrl(state.url, conditionals, MAX_REDIRECTS, (err, res) => {
     if (err) {
       const isConnectivity = CONNECTIVITY_ERRORS.has(err.code) ||
                              err.message === 'Fetch timed out';
@@ -378,19 +421,19 @@ function refreshIcal(sourceUrl, done) {
         // Keep it quiet — the cached file is still being served fine.
         // No toast: VPN dropping is routine and would spam the user.
         const reason  = err.code || 'timeout';
-        const serving = cache.body
-          ? `serving cached ${cache.body.length.toLocaleString()} bytes`
+        const serving = state.cache.body
+          ? `serving cached ${state.cache.body.length.toLocaleString()} bytes`
           : 'no cache yet — Outlook will get 503 until network returns';
-        logger.info(`Network unavailable (${reason}) — ${serving}`);
-        networkDown = true;   // remember, so we can toast on recovery
+        logger.info(`[${state.localName}] Network unavailable (${reason}) — ${serving}`);
+        state.networkDown = true;   // remember, so we can toast on recovery
       } else {
         // Unexpected error: bad URL, auth failure, TLS error, etc.
         // These are worth a toast — the user probably needs to act.
-        logger.error(`Fetch failed: ${err.message}`);
-        notify('Fetch error', err.message);
+        logger.error(`[${state.localName}] Fetch failed: ${err.message}`);
+        notify('Fetch error', `${state.localName}: ${err.message}`);
       }
 
-      lastFetchError = {
+      state.lastFetchError = {
         message: err.message,
         code:    err.code   || null,
         at:      new Date().toISOString(),
@@ -400,54 +443,54 @@ function refreshIcal(sourceUrl, done) {
 
     // ── Not Modified ──────────────────────────────────────────
     if (res.status === 'not-modified') {
-      lastFetchError = null;
-      if (networkDown) {
-        networkDown = false;
-        notify('Back online', 'Connection restored — calendar is up to date.');
+      state.lastFetchError = null;
+      if (state.networkDown) {
+        state.networkDown = false;
+        notify('Back online', `${state.localName}: connection restored — calendar is up to date.`);
       }
-      logger.info(`iCal unchanged (304) — cache: ${(cache.body || '').length.toLocaleString()} bytes`);
+      logger.info(`[${state.localName}] iCal unchanged (304) — cache: ${(state.cache.body || '').length.toLocaleString()} bytes`);
       return finish(null, false);
     }
 
     // ── Sanity check ──────────────────────────────────────────
     if (!res.body.includes('BEGIN:VCALENDAR')) {
-      logger.warn('Response does not appear to be a valid iCal file (no BEGIN:VCALENDAR)');
+      logger.warn(`[${state.localName}] Response does not appear to be a valid iCal file (no BEGIN:VCALENDAR)`);
     }
 
     // ── Detect what actually changed ──────────────────────────
     // A 200 doesn't guarantee the content changed — some servers don't send
     // ETags and just return the full body every time. Compare against the
     // previous body so we only toast on a genuine content change.
-    const hadCache      = cache.body !== null;
-    const contentChanged = cache.body !== res.body;
-    const recovered     = networkDown;   // were we offline before this success?
+    const hadCache      = state.cache.body !== null;
+    const contentChanged = state.cache.body !== res.body;
+    const recovered     = state.networkDown;   // were we offline before this success?
 
     // ── Update memory cache ───────────────────────────────────
-    cache.body         = res.body;
-    cache.etag         = res.etag;
-    cache.lastModified = res.lastModified;
-    cache.fetchedAt    = new Date();
-    cache.fromDisk     = false;
-    lastFetchError     = null;
-    networkDown        = false;
+    state.cache.body         = res.body;
+    state.cache.etag         = res.etag;
+    state.cache.lastModified = res.lastModified;
+    state.cache.fetchedAt    = new Date();
+    state.cache.fromDisk     = false;
+    state.lastFetchError     = null;
+    state.networkDown        = false;
 
     // ── Persist to disk ───────────────────────────────────────
     // Written synchronously so it's always in a consistent state.
     // File is read on startup before the first network request succeeds.
-    saveDiskCache(cache.body);
+    saveDiskCache(state.cacheFile, state.cache.body);
 
-    logger.info(`iCal refreshed — ${cache.body.length.toLocaleString()} bytes`
+    logger.info(`[${state.localName}] iCal refreshed — ${state.cache.body.length.toLocaleString()} bytes`
       + (res.etag ? ` ETag:${res.etag}` : ''));
 
     // ── Notifications ─────────────────────────────────────────
     // Recovery takes priority: if we were offline, a single "back online"
     // toast is the meaningful event — don't also fire an "updated" toast.
     if (recovered) {
-      notify('Back online', `Connection restored — calendar cached (${cache.body.length.toLocaleString()} bytes).`);
+      notify('Back online', `${state.localName}: connection restored — calendar cached (${state.cache.body.length.toLocaleString()} bytes).`);
     } else if (contentChanged && hadCache) {
       // Only toast "updated" when we already had data and it changed —
       // avoids a toast on the very first fetch at startup.
-      notify('Calendar updated', `New data received (${cache.body.length.toLocaleString()} bytes).`);
+      notify('Calendar updated', `${state.localName}: new data received (${state.cache.body.length.toLocaleString()} bytes).`);
     }
 
     finish(null, true);
@@ -464,38 +507,50 @@ function startServer(cfg) {
   notifyEnabled = cfg.notify !== false;
   initNotifier();
 
+  const calendars = cfg.calendars.map(c => createCalendarState(c.index, c.url, c.localName));
+  // Path lookup for named routing, e.g. "/calendar2.ics" -> that calendar's state.
+  const calendarByPath = new Map(calendars.map(s => [`/${s.localName}`, s]));
+
   logger.info('─'.repeat(58));
   logger.info(`${APP_NAME} v${VERSION}`);
-  logger.info(`  Source URL : ${cfg.url}`);
+  calendars.forEach(s => {
+    logger.info(`  Calendar ${s.index}  : ${s.url}`);
+    logger.info(`    → served at /${s.localName}`);
+  });
   logger.info(`  Local port : ${cfg.port}`);
   logger.info(`  Interval   : ${cfg.interval} minute(s)`);
   logger.info(`  Toasts     : ${notifyEnabled ? (notifier ? 'enabled' : 'enabled (module missing)') : 'disabled'}`);
   logger.info(`  Debug mode : ${debugMode ? 'on — toasting startup/shutdown/HTTP activity' : 'off'}`);
   logger.info(`  Log file   : ${LOG_FILE}`);
-  logger.info(`  Disk cache : ${CACHE_FILE}`);
   logger.info('─'.repeat(58));
 
   // ── Warm up from disk cache ────────────────────────────────
-  // Load the last persisted iCal immediately so Outlook gets a response
-  // even before the first network request completes (or if it fails).
-  const diskBody = loadDiskCache();
-  if (diskBody) {
-    cache.body     = diskBody;
-    cache.fromDisk = true;
-    logger.info(`Loaded ${diskBody.length.toLocaleString()} bytes from disk cache — ready to serve`);
-  } else {
-    logger.info('No disk cache found — will serve after first successful fetch');
-  }
-
-  // ── Initial network fetch ──────────────────────────────────
-  refreshIcal(cfg.url, (err) => {
-    if (err && !cache.body) {
-      logger.warn('Initial fetch failed and no disk cache — Outlook will get 503 until network recovers');
+  // Load each calendar's last persisted iCal immediately so Outlook gets a
+  // response even before the first network request completes (or if it fails).
+  calendars.forEach(s => {
+    const diskBody = loadDiskCache(s.cacheFile);
+    if (diskBody) {
+      s.cache.body     = diskBody;
+      s.cache.fromDisk = true;
+      logger.info(`[${s.localName}] Loaded ${diskBody.length.toLocaleString()} bytes from disk cache — ready to serve`);
+    } else {
+      logger.info(`[${s.localName}] No disk cache found — will serve after first successful fetch`);
     }
   });
 
+  // ── Initial network fetch ──────────────────────────────────
+  calendars.forEach(s => {
+    refreshIcal(s, (err) => {
+      if (err && !s.cache.body) {
+        logger.warn(`[${s.localName}] Initial fetch failed and no disk cache — Outlook will get 503 until network recovers`);
+      }
+    });
+  });
+
   // ── Scheduled refresh ──────────────────────────────────────
-  const timer = setInterval(() => refreshIcal(cfg.url, () => {}), intervalMs);
+  const timer = setInterval(() => {
+    calendars.forEach(s => refreshIcal(s, () => {}));
+  }, intervalMs);
   timer.unref(); // Don't prevent clean process exit
 
   // ── Request handler ───────────────────────────────────────
@@ -503,39 +558,51 @@ function startServer(cfg) {
     logger.info(`${req.method} ${req.url}`);
     if (debugMode) notify('Debug: HTTP', `${req.method} ${req.url} from ${req.socket.remoteAddress}`);
 
+    const urlPath = req.url.split('?')[0];
+
     // ── /status or /health ────────────────────────────────────
-    if (req.url === '/status' || req.url === '/health') {
-      const next = cache.fetchedAt
-        ? new Date(+cache.fetchedAt + intervalMs).toISOString()
-        : null;
-      const diskExists = fs.existsSync(CACHE_FILE);
-      let   diskBytes  = 0;
-      if (diskExists) {
-        try { diskBytes = fs.statSync(CACHE_FILE).size; } catch (_) {}
-      }
+    if (urlPath === '/status' || urlPath === '/health') {
+      const calendarStatuses = calendars.map(s => {
+        const next = s.cache.fetchedAt
+          ? new Date(+s.cache.fetchedAt + intervalMs).toISOString()
+          : null;
+        const diskExists = fs.existsSync(s.cacheFile);
+        let   diskBytes  = 0;
+        if (diskExists) {
+          try { diskBytes = fs.statSync(s.cacheFile).size; } catch (_) {}
+        }
+        return {
+          path:             `/${s.localName}`,
+          sourceUrl:        s.url,
+          status:           s.cache.body ? 'ok' : 'pending',
+          message:          s.cache.body
+                              ? (s.cache.fromDisk
+                                  ? 'Serving disk cache — network fetch pending'
+                                  : 'Calendar cached and ready')
+                              : 'Waiting for first fetch',
+          cacheBytes:       s.cache.body ? s.cache.body.length : 0,
+          cacheFromDisk:    s.cache.fromDisk,
+          fetchedAt:        s.cache.fetchedAt?.toISOString() ?? null,
+          nextFetchAt:      next,
+          diskCacheFile:    s.cacheFile,
+          diskCacheExists:  diskExists,
+          diskCacheBytes:   diskBytes,
+          lastFetchError:   s.lastFetchError,
+          networkDown:      s.networkDown,
+        };
+      });
+
+      const readyCount = calendars.filter(s => s.cache.body).length;
+      const overallStatus = readyCount === calendars.length ? 'ok'
+        : readyCount > 0 ? 'partial' : 'pending';
+
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({
-        status:           cache.body ? 'ok' : 'pending',
-        message:          cache.body
-                            ? (cache.fromDisk
-                                ? 'Serving disk cache — network fetch pending'
-                                : 'Calendar cached and ready')
-                            : 'Waiting for first fetch',
-        sourceUrl:        cfg.url,
+        status:           overallStatus,
+        message:          `${readyCount}/${calendars.length} calendar(s) cached and ready`,
         port:             cfg.port,
         intervalMinutes:  cfg.interval,
-        // In-memory cache
-        cacheBytes:       cache.body ? cache.body.length : 0,
-        cacheFromDisk:    cache.fromDisk,
-        fetchedAt:        cache.fetchedAt?.toISOString() ?? null,
-        nextFetchAt:      next,
-        // Disk cache
-        diskCacheFile:    CACHE_FILE,
-        diskCacheExists:  diskExists,
-        diskCacheBytes:   diskBytes,
-        // Last error (null when last fetch was successful)
-        lastFetchError:   lastFetchError,
-        networkDown:      networkDown,
+        calendars:        calendarStatuses,
         // Notifications
         notifications:    notifyEnabled ? (notifier ? 'enabled' : 'unavailable') : 'disabled',
         // Process info
@@ -545,45 +612,64 @@ function startServer(cfg) {
       return;
     }
 
-    // ── POST /refresh — force immediate re-fetch ───────────────
-    if (req.url === '/refresh') {
+    // ── POST /refresh — force immediate re-fetch of every calendar ─────
+    if (urlPath === '/refresh') {
       if (req.method !== 'POST') {
         res.writeHead(405, { Allow: 'POST', 'Content-Type': 'text/plain' });
         res.end('Send a POST to /refresh to trigger an immediate re-fetch.');
         return;
       }
       logger.info('Manual refresh triggered via /refresh endpoint');
-      refreshIcal(cfg.url, (err) => {
-        if (err) {
-          const isConnectivity = CONNECTIVITY_ERRORS.has(err.code) ||
-                                 err.message === 'Fetch timed out';
-          if (isConnectivity && cache.body) {
-            // Network is down but we have cached data — not a failure from
-            // the caller's perspective, just inform them what's happening.
-            res.writeHead(200, { 'Content-Type': 'text/plain' });
-            return res.end(
-              `Network unavailable (${err.code || 'timeout'}) — ` +
-              `serving cached data (${cache.body.length.toLocaleString()} bytes)`
-            );
+
+      let remaining = calendars.length;
+      const lines = [];
+      calendars.forEach(s => {
+        refreshIcal(s, (err) => {
+          if (err) {
+            const isConnectivity = CONNECTIVITY_ERRORS.has(err.code) ||
+                                   err.message === 'Fetch timed out';
+            if (isConnectivity && s.cache.body) {
+              // Network is down but we have cached data — not a failure from
+              // the caller's perspective, just inform them what's happening.
+              lines.push(`/${s.localName}: network unavailable (${err.code || 'timeout'}) — serving cached data (${s.cache.body.length.toLocaleString()} bytes)`);
+            } else {
+              lines.push(`/${s.localName}: refresh failed — ${err.message}`);
+            }
+          } else {
+            lines.push(`/${s.localName}: refreshed OK — ${s.cache.body ? s.cache.body.length.toLocaleString() : 0} bytes cached`);
           }
-          res.writeHead(502, { 'Content-Type': 'text/plain' });
-          return res.end(`Refresh failed: ${err.message}`);
-        }
-        res.writeHead(200, { 'Content-Type': 'text/plain' });
-        res.end(`Refreshed OK — ${cache.body ? cache.body.length.toLocaleString() : 0} bytes cached`);
+
+          if (--remaining === 0) {
+            const anyCache = calendars.some(s2 => s2.cache.body);
+            res.writeHead(anyCache ? 200 : 502, { 'Content-Type': 'text/plain' });
+            res.end(lines.join('\n'));
+          }
+        });
       });
       return;
     }
 
-    // ── iCal feed — serve on any other path ───────────────────
-    // (Outlook will call whatever URL the user subscribed to)
+    // ── iCal feed(s) ───────────────────────────────────────────
     if (req.method !== 'GET' && req.method !== 'HEAD') {
       res.writeHead(405, { Allow: 'GET, HEAD', 'Content-Type': 'text/plain' });
       res.end('Method Not Allowed');
       return;
     }
 
-    if (!cache.body) {
+    let target = calendarByPath.get(urlPath);
+    if (!target && calendars.length === 1) {
+      // Legacy single-calendar behavior: Outlook can be pointed at ANY path
+      // and still get the one configured feed — preserves pre-1.3 subscriptions.
+      target = calendars[0];
+    }
+
+    if (!target) {
+      res.writeHead(404, { 'Content-Type': 'text/plain' });
+      res.end(`Not found. Available calendars: ${calendars.map(s => '/' + s.localName).join(', ')}`);
+      return;
+    }
+
+    if (!target.cache.body) {
       res.writeHead(503, {
         'Content-Type': 'text/plain',
         'Retry-After':  '10',
@@ -592,13 +678,13 @@ function startServer(cfg) {
       return;
     }
 
-    const bodyBuf = Buffer.from(cache.body, 'utf8');
+    const bodyBuf = Buffer.from(target.cache.body, 'utf8');
     res.writeHead(200, {
       'Content-Type':        'text/calendar; charset=utf-8',
-      'Content-Disposition': 'inline; filename="calendar.ics"',
+      'Content-Disposition': `inline; filename="${target.localName}"`,
       'Content-Length':      bodyBuf.length,
       'Cache-Control':       'no-cache, no-store, must-revalidate',
-      'Last-Modified':       cache.fetchedAt?.toUTCString() ?? new Date().toUTCString(),
+      'Last-Modified':       target.cache.fetchedAt?.toUTCString() ?? new Date().toUTCString(),
       'Access-Control-Allow-Origin': '*',
     });
 
@@ -608,10 +694,10 @@ function startServer(cfg) {
 
   server.listen(cfg.port, '127.0.0.1', () => {
     logger.info('✓ Server ready');
-    logger.info(`  iCal feed → http://localhost:${cfg.port}/calendar.ics`);
+    calendars.forEach(s => logger.info(`  iCal feed → http://localhost:${cfg.port}/${s.localName}`));
     logger.info(`  Status    → http://localhost:${cfg.port}/status`);
     logger.info(`  Refresh   → POST http://localhost:${cfg.port}/refresh`);
-    if (debugMode) notify('Debug: started', `Listening on http://localhost:${cfg.port}`);
+    if (debugMode) notify('Debug: started', `Listening on http://localhost:${cfg.port} (${calendars.length} calendar${calendars.length === 1 ? '' : 's'})`);
   });
 
   server.on('error', (err) => {
@@ -655,7 +741,7 @@ function makeService() {
   }
   return new Service({
     name:        APP_NAME,
-    description: 'Downloads a remote iCal feed and serves it locally for Outlook.',
+    description: 'Downloads remote iCal feed(s) and serves them locally for Outlook.',
     script:      path.resolve(__dirname, 'ical-proxy.js'),
     // No extra args: on start the service reads from ical-proxy.config.json
   });
@@ -671,7 +757,9 @@ function installService(cfg) {
   });
   svc.on('start', () => {
     logger.info('Service is running!');
-    logger.info(`Add this URL to Outlook → http://localhost:${cfg.port}/calendar.ics`);
+    cfg.calendars.forEach(c => {
+      logger.info(`Add this URL to Outlook → http://localhost:${cfg.port}/${c.localName}`);
+    });
     logger.info('To check status run:  node ical-proxy.js --status');
   });
   svc.on('alreadyinstalled', () => {
@@ -698,7 +786,7 @@ function printHelp() {
   console.log(`
 ╔══════════════════════════════════════════════════════════════╗
 ║            iCal Proxy Server  v${VERSION}                        ║
-║  Serves a remote .ics feed locally so Outlook can sync it   ║
+║  Serves remote .ics feed(s) locally so Outlook can sync them ║
 ╚══════════════════════════════════════════════════════════════╝
 
 USAGE
@@ -706,19 +794,24 @@ USAGE
 
 OPTIONS
   --url <url>          Remote iCal / .ics feed URL      [required*]
-  --port <n>           Local HTTP port                  [default: 8080]
-  --interval <mins>    Refresh interval in minutes      [default: 30]
-  --notify             Enable Windows toast notifications   [default]
-  --no-notify          Disable Windows toast notifications
-  --debug              Toast on startup, shutdown, and every HTTP
-                        request handled by the local server (foreground
-                        runs only — never saved to the service config)
-  --install            Install as a Windows background service
-  --uninstall          Remove the Windows service
-  --help, -h           Show this help
+                        Shorthand for --url1 (single-calendar mode)
+  --url1 <url>          First calendar's feed URL
+  --url2 <url>          Second calendar's feed URL, etc. (--url3, --url4, ...)
+  --calendar1 <name>    Local filename for calendar 1    [default: calendar1.ics]
+  --calendar2 <name>    Local filename for calendar 2, etc.
+  --port <n>            Local HTTP port                  [default: 8080]
+  --interval <mins>     Refresh interval in minutes      [default: 30]
+  --notify              Enable Windows toast notifications   [default]
+  --no-notify           Disable Windows toast notifications
+  --debug               Toast on startup, shutdown, and every HTTP
+                         request handled by the local server (foreground
+                         runs only — never saved to the service config)
+  --install             Install as a Windows background service
+  --uninstall            Remove the Windows service
+  --help, -h            Show this help
 
 EXAMPLES
-  # Run interactively (Ctrl-C to stop)
+  # Run interactively (Ctrl-C to stop) — single calendar, any path works
   node ical-proxy.js --url https://example.com/feed.ics
 
   # Custom port, refresh every 15 minutes
@@ -727,6 +820,13 @@ EXAMPLES
   # Watch startup/shutdown/HTTP activity as toasts while debugging
   node ical-proxy.js --url https://example.com/feed.ics --debug
 
+  # Multiple calendars, each served at its own filename
+  node ical-proxy.js --url1 https://example.com/work.ics --calendar1 work.ics \\
+                      --url2 https://example.com/family.ics --calendar2 family.ics
+
+  # Multiple calendars, default filenames (calendar1.ics, calendar2.ics)
+  node ical-proxy.js --url1 https://example.com/work.ics --url2 https://example.com/family.ics
+
   # Install as auto-starting Windows service (must run as Administrator)
   node ical-proxy.js --install --url https://example.com/feed.ics --port 8080 --interval 30
 
@@ -734,13 +834,14 @@ EXAMPLES
   node ical-proxy.js --uninstall
 
 ENDPOINTS (once running)
-  GET  http://localhost:8080/calendar.ics   ← paste this into Outlook
-  GET  http://localhost:8080/status          JSON health & cache info
-  POST http://localhost:8080/refresh         Force an immediate re-fetch
+  GET  http://localhost:8080/calendar1.ics   ← paste this into Outlook
+                                                (single-calendar mode: any path works)
+  GET  http://localhost:8080/status           JSON health & cache info, all calendars
+  POST http://localhost:8080/refresh          Force an immediate re-fetch of all calendars
 
 OUTLOOK SETUP
   File → Account Settings → Internet Calendars → New
-  Enter: http://localhost:8080/calendar.ics
+  Enter: http://localhost:8080/calendar1.ics  (or whichever local filename you set)
 
 NOTIFICATIONS
   Windows toasts fire on: real fetch errors, calendar updates, and when
@@ -756,7 +857,7 @@ LOG FILE
 `);
 }
 
-// ─── Entry Point ──────────────────────────────────────────────────────────────
+// ─── Entry Point ────────────────────────────────────────────────────────────
 
 function main() {
   const args = parseArgs();
@@ -767,8 +868,8 @@ function main() {
   if (args.uninstall) { uninstallService(); return; }
 
   if (args.install) {
-    if (!args.url) {
-      console.error('\nError: --url is required when using --install\n');
+    if (!args.urls || Object.keys(args.urls).length === 0) {
+      console.error('\nError: at least one --url (or --url1, --url2, ...) is required when using --install\n');
       process.exit(1);
     }
     installService(buildConfig(args));

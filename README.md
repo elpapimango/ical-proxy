@@ -1,7 +1,7 @@
 # iCal Proxy Server
 
-Downloads a remote iCal / `.ics` feed and re-serves it from **localhost** over HTTP.  
-Outlook (or any calendar client) subscribes to the local URL — the proxy handles fetching, caching, and polling the remote source in the background.
+Downloads one or more remote iCal / `.ics` feeds and re-serves them from **localhost** over HTTP.  
+Outlook (or any calendar client) subscribes to the local URL(s) — the proxy handles fetching, caching, and polling each remote source in the background.
 
 ---
 
@@ -45,9 +45,13 @@ Press `Ctrl-C` to stop the foreground server.
 
 | Option | Default | Description |
 |---|---|---|
-| `--url <url>` | *(required\*)* | Remote iCal / `.ics` URL to proxy |
+| `--url <url>` | *(required\*)* | Remote iCal / `.ics` URL to proxy. Shorthand for `--url1` (single-calendar mode) |
+| `--url1 <url>` | — | First calendar's remote feed URL |
+| `--url2 <url>`, `--url3 <url>`, ... | — | Additional calendars — one flag per feed |
+| `--calendar1 <name>` | `calendar1.ics` | Local filename calendar 1 is served at |
+| `--calendar2 <name>`, ... | `calendar2.ics`, ... | Local filename for calendar 2, etc. |
 | `--port <n>` | `8080` | Local HTTP port to listen on |
-| `--interval <mins>` | `30` | How often to re-fetch the remote feed |
+| `--interval <mins>` | `30` | How often to re-fetch every remote feed |
 | `--notify` | *(on)* | Enable Windows toast notifications |
 | `--no-notify` | — | Disable Windows toast notifications |
 | `--debug` | *(off)* | Toast on startup, shutdown, and every HTTP request the local server handles |
@@ -56,6 +60,11 @@ Press `Ctrl-C` to stop the foreground server.
 | `--help` | — | Print help and exit |
 
 \* `--url` is not required if the service was previously installed (config is saved automatically).
+
+With a single calendar (`--url` or one `--urlN`), Outlook can subscribe to
+**any path** on the proxy — the `--calendarN` filename is cosmetic. With two
+or more calendars, each is only served at its own filename; unmatched paths
+get a `404` listing the available ones.
 
 ---
 
@@ -74,9 +83,21 @@ node ical-proxy.js --url https://example.com/calendar.ics --debug
 # URL with embedded credentials
 node ical-proxy.js --url https://user:password@example.com/private.ics
 
+# Two calendars, custom local filenames
+node ical-proxy.js --url1 https://example.com/work.ics    --calendar1 work.ics \
+                    --url2 https://example.com/family.ics --calendar2 family.ics
+
+# Two calendars, default local filenames (calendar1.ics, calendar2.ics)
+node ical-proxy.js --url1 https://example.com/work.ics --url2 https://example.com/family.ics
+
 # Install as Windows service (auto-starts on boot)
 # Run this command prompt as Administrator
 node ical-proxy.js --install --url https://example.com/calendar.ics --port 8080 --interval 30
+
+# Install as a service with multiple calendars
+node ical-proxy.js --install --url1 https://example.com/work.ics --calendar1 work.ics \
+                              --url2 https://example.com/family.ics --calendar2 family.ics \
+                              --port 8080 --interval 30
 
 # Remove the Windows service
 # Run this command prompt as Administrator
@@ -89,15 +110,20 @@ node ical-proxy.js --uninstall
 
 Once running, four endpoints are available:
 
-### `GET /calendar.ics` (or any path)
-The proxied iCal feed. Any path works — Outlook will use whichever URL you gave it.
+### `GET /<calendarN.ics>` (or any path, single-calendar mode)
+The proxied iCal feed(s). With one calendar configured, any path works —
+Outlook will use whichever URL you gave it. With two or more, each is only
+served at its own local filename (`--calendarN`, default `calendarN.ics`);
+any other path returns `404` listing the available ones.
 
 ```
-http://localhost:8080/calendar.ics
+http://localhost:8080/calendar1.ics
+http://localhost:8080/calendar2.ics
 ```
 
 ### `GET /status`
-JSON health check showing cache state, last fetch time, and next scheduled fetch.
+JSON health check covering every configured calendar — cache state, last
+fetch time, and next scheduled fetch for each.
 
 ```bash
 curl http://localhost:8080/status
@@ -106,24 +132,49 @@ curl http://localhost:8080/status
 ```json
 {
   "status": "ok",
-  "message": "Calendar cached and ready",
-  "sourceUrl": "https://example.com/calendar.ics",
+  "message": "2/2 calendar(s) cached and ready",
   "port": 8080,
   "intervalMinutes": 30,
-  "cacheBytes": 14823,
-  "cacheFromDisk": false,
-  "fetchedAt": "2025-06-01T10:00:00.000Z",
-  "nextFetchAt": "2025-06-01T10:30:00.000Z",
-  "diskCacheFile": "C:\\path\\to\\ical-proxy\\ical-proxy.cache.ics",
-  "diskCacheExists": true,
-  "diskCacheBytes": 14823,
-  "lastFetchError": null,
-  "networkDown": false,
+  "calendars": [
+    {
+      "path": "/calendar1.ics",
+      "sourceUrl": "https://example.com/work.ics",
+      "status": "ok",
+      "message": "Calendar cached and ready",
+      "cacheBytes": 14823,
+      "cacheFromDisk": false,
+      "fetchedAt": "2025-06-01T10:00:00.000Z",
+      "nextFetchAt": "2025-06-01T10:30:00.000Z",
+      "diskCacheFile": "C:\\path\\to\\ical-proxy\\ical-proxy.cache.ics",
+      "diskCacheExists": true,
+      "diskCacheBytes": 14823,
+      "lastFetchError": null,
+      "networkDown": false
+    },
+    {
+      "path": "/calendar2.ics",
+      "sourceUrl": "https://example.com/family.ics",
+      "status": "ok",
+      "message": "Calendar cached and ready",
+      "cacheBytes": 9001,
+      "cacheFromDisk": false,
+      "fetchedAt": "2025-06-01T10:00:00.500Z",
+      "nextFetchAt": "2025-06-01T10:30:00.500Z",
+      "diskCacheFile": "C:\\path\\to\\ical-proxy\\ical-proxy.cache2.ics",
+      "diskCacheExists": true,
+      "diskCacheBytes": 9001,
+      "lastFetchError": null,
+      "networkDown": false
+    }
+  ],
   "notifications": "enabled",
   "hostname": "MY-PC",
   "uptime": "1234s"
 }
 ```
+
+Top-level `status` is `"ok"` when every calendar has a cache, `"partial"`
+when some do and some don't, `"pending"` when none do yet.
 
 ### `GET /health`
 Alias for `/status` — same response, different path (for health-check tooling that expects `/health`).
@@ -133,10 +184,16 @@ curl http://localhost:8080/health
 ```
 
 ### `POST /refresh`
-Trigger an immediate re-fetch (useful after you know the remote calendar changed).
+Trigger an immediate re-fetch of **every** configured calendar (useful after
+you know a remote calendar changed). Responds with one line per calendar.
 
 ```bash
 curl -X POST http://localhost:8080/refresh
+```
+
+```
+/calendar1.ics: refreshed OK — 14,823 bytes cached
+/calendar2.ics: refreshed OK — 9,001 bytes cached
 ```
 
 ---
@@ -147,11 +204,12 @@ curl -X POST http://localhost:8080/refresh
 2. **File → Account Settings → Account Settings**
 3. Click the **Internet Calendars** tab
 4. Click **New…**
-5. Enter: `http://localhost:8080/calendar.ics`
+5. Enter: `http://localhost:8080/calendar1.ics` (or whichever local filename you configured)
 6. Click **Add**
 7. Give it a name and click **OK**
+8. Repeat for each additional calendar (`calendar2.ics`, etc.)
 
-Outlook will now sync from the local proxy instead of hitting the remote URL directly.
+Outlook will now sync from the local proxy instead of hitting the remote URL(s) directly.
 
 ---
 
@@ -242,12 +300,16 @@ node ical-proxy.js --uninstall
 
 ### Update settings
 
-To change the URL, port, or interval after installing:
+To change the URL(s), port, or interval after installing:
 
 ```bat
 node ical-proxy.js --uninstall
 node ical-proxy.js --install --url https://new-url.com/calendar.ics --port 8080 --interval 15
 ```
+
+For multiple calendars, pass all `--urlN`/`--calendarN` flags again on the
+`--install` line — it always replaces the full saved calendar list, it
+doesn't merge with what was there before.
 
 ---
 
@@ -263,12 +325,19 @@ This file is read on startup when no CLI args are present (i.e., when launched b
 
 ```json
 {
-  "url": "https://example.com/calendar.ics",
+  "calendars": [
+    { "index": 1, "url": "https://example.com/work.ics", "localName": "calendar1.ics" },
+    { "index": 2, "url": "https://example.com/family.ics", "localName": "calendar2.ics" }
+  ],
   "port": 8080,
   "interval": 30,
   "notify": true
 }
 ```
+
+Config files saved by pre-1.3 versions (flat `{ "url": ..., "port": ..., ... }`,
+one calendar only) are read and upgraded to this shape automatically — no
+manual migration needed.
 
 ---
 
@@ -327,7 +396,8 @@ ical-proxy/
 ├── package.json            # Deps: node-windows (service) + node-notifier (toasts)
 ├── README.md
 ├── CLAUDE.md               # Context file for Claude Code
-├── ical-proxy.config.json  # Auto-generated on first run with --url or --install
-├── ical-proxy.cache.ics    # Auto-generated — last known-good calendar (served offline)
+├── ical-proxy.config.json  # Auto-generated on first run with --url/--urlN or --install
+├── ical-proxy.cache.ics    # Auto-generated — calendar 1's last known-good body (served offline)
+├── ical-proxy.cache2.ics   # Auto-generated — calendar 2's disk cache, etc. (one file per calendar 2+)
 └── ical-proxy.log          # Auto-generated — rolling log of all activity
 ```

@@ -1,7 +1,7 @@
 {
   "name": "ical-proxy",
-  "version": "1.2.0",
-  "description": "Downloads a remote iCal feed and serves it locally over HTTP — designed for Outlook on Windows",
+  "version": "1.3.0",
+  "description": "Downloads one or more remote iCal feeds and serves them locally over HTTP — designed for Outlook on Windows",
   "main": "ical-proxy.js",
   "bin": {
     "ical-proxy": "./ical-proxy.js"
