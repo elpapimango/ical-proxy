@@ -254,6 +254,17 @@ let lastFetchError = null;
 let networkDown = false;
 
 /**
+ * Guards against overlapping refreshIcal() runs. The scheduled interval and
+ * a manual POST /refresh can otherwise both be in flight at once; whichever
+ * network response lands last wins and can stomp a newer result with a
+ * stale one (both in the in-memory cache and on disk via saveDiskCache).
+ * While a refresh is in progress, additional callers are queued and all
+ * get the result of the single in-flight run instead of starting their own.
+ */
+let refreshInProgress = false;
+let queuedRefreshCallbacks = [];
+
+/**
  * Perform a single HTTP/S GET, following redirects.
  * @param {string}   targetUrl
  * @param {object}   extraHeaders  — conditional GET headers, etc.
@@ -336,6 +347,22 @@ function fetchUrl(targetUrl, extraHeaders, redirectsLeft, cb) {
  * @param {Function} done(err, updated:boolean)
  */
 function refreshIcal(sourceUrl, done) {
+  // Coalesce with an in-flight run instead of starting a second overlapping
+  // fetch — see refreshInProgress comment above.
+  if (refreshInProgress) {
+    queuedRefreshCallbacks.push(done);
+    return;
+  }
+  refreshInProgress = true;
+
+  const finish = (err, updated) => {
+    refreshInProgress = false;
+    const queued = queuedRefreshCallbacks;
+    queuedRefreshCallbacks = [];
+    done(err, updated);
+    queued.forEach(cb => cb(err, updated));
+  };
+
   const conditionals = {};
   if (cache.etag)         conditionals['If-None-Match']     = cache.etag;
   if (cache.lastModified) conditionals['If-Modified-Since'] = cache.lastModified;
@@ -367,7 +394,7 @@ function refreshIcal(sourceUrl, done) {
         code:    err.code   || null,
         at:      new Date().toISOString(),
       };
-      return done(err);
+      return finish(err);
     }
 
     // ── Not Modified ──────────────────────────────────────────
@@ -378,7 +405,7 @@ function refreshIcal(sourceUrl, done) {
         notify('Back online', 'Connection restored — calendar is up to date.');
       }
       logger.info(`iCal unchanged (304) — cache: ${(cache.body || '').length.toLocaleString()} bytes`);
-      return done(null, false);
+      return finish(null, false);
     }
 
     // ── Sanity check ──────────────────────────────────────────
@@ -422,7 +449,7 @@ function refreshIcal(sourceUrl, done) {
       notify('Calendar updated', `New data received (${cache.body.length.toLocaleString()} bytes).`);
     }
 
-    done(null, true);
+    finish(null, true);
   });
 }
 

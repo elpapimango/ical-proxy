@@ -83,7 +83,7 @@ node ical-proxy.js --uninstall
 
 ## HTTP Endpoints
 
-Once running, three endpoints are available:
+Once running, four endpoints are available:
 
 ### `GET /calendar.ics` (or any path)
 The proxied iCal feed. Any path works — Outlook will use whichever URL you gave it.
@@ -107,11 +107,25 @@ curl http://localhost:8080/status
   "port": 8080,
   "intervalMinutes": 30,
   "cacheBytes": 14823,
+  "cacheFromDisk": false,
   "fetchedAt": "2025-06-01T10:00:00.000Z",
   "nextFetchAt": "2025-06-01T10:30:00.000Z",
+  "diskCacheFile": "C:\\path\\to\\ical-proxy\\ical-proxy.cache.ics",
+  "diskCacheExists": true,
+  "diskCacheBytes": 14823,
+  "lastFetchError": null,
+  "networkDown": false,
+  "notifications": "enabled",
   "hostname": "MY-PC",
   "uptime": "1234s"
 }
+```
+
+### `GET /health`
+Alias for `/status` — same response, different path (for health-check tooling that expects `/health`).
+
+```bash
+curl http://localhost:8080/health
 ```
 
 ### `POST /refresh`
@@ -228,7 +242,8 @@ This file is read on startup when no CLI args are present (i.e., when launched b
 {
   "url": "https://example.com/calendar.ics",
   "port": 8080,
-  "interval": 30
+  "interval": 30,
+  "notify": true
 }
 ```
 

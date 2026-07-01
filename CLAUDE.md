@@ -94,6 +94,9 @@ a 30-second socket timeout. No npm dependencies.
 - Connectivity error classification (see below)
 - Disk persistence on success
 - `lastFetchError` tracking for `/status`
+- `refreshInProgress` mutex — overlapping calls (scheduled interval vs. manual
+  `/refresh`) are queued and resolved from the single in-flight run instead of
+  starting a second fetch (see below)
 
 ### 7. HTTP server
 `startServer(cfg)` binds to `127.0.0.1` only (never exposed externally).
@@ -155,6 +158,17 @@ This is documented in the `notify()` header comment and the README. Not a code
 issue — a Windows security boundary. Solution is to run the service as the user
 account or run in the foreground.
 
+### `refreshIcal` runs are serialized
+`refreshInProgress` (bool) + `queuedRefreshCallbacks` (array) in the iCal
+Fetcher section prevent two `refreshIcal` calls from being in flight at once.
+Without this, the scheduled interval and a manual `POST /refresh` could race:
+whichever network response lands *last* wins, which can overwrite a newer
+result with a stale one in both the in-memory cache and `saveDiskCache`'s
+disk write. When a refresh is already running, new callers are pushed onto
+`queuedRefreshCallbacks` and all get the in-flight run's result instead of
+starting their own — `saveDiskCache` is therefore never called twice
+concurrently.
+
 ### Service boots without CLI args
 When `node-windows` starts the service it passes no arguments. The main()
 function checks for `CONFIG_FILE` existence when `process.argv.length <= 2` and
@@ -169,6 +183,9 @@ entry point.
 - `timer.unref()` — required so the interval doesn't prevent clean process exit
 - `saveDiskCache` is synchronous — if changed to async, add error handling for
   concurrent writes during rapid `/refresh` calls
+- `refreshInProgress` / `queuedRefreshCallbacks` — serializes `refreshIcal`
+  runs so overlapping fetches can't stomp each other's result; don't remove
+  without another way to prevent concurrent runs
 - `CONNECTIVITY_ERRORS` — check the Node.js docs before adding/removing codes;
   `ECONNRESET` in particular can be both a connectivity issue and a server bug
 
