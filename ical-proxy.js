@@ -617,6 +617,11 @@ function startServer(cfg) {
     } else {
       notify('Server error', err.message);
     }
+    // The server never bound, so there's nothing for server.close() to stop —
+    // just cancel the polling timer that was already started above so the
+    // process doesn't linger before exiting.
+    clearInterval(timer);
+    logger.info('Shutting down — server failed to start.');
     process.exit(1);
   });
 
