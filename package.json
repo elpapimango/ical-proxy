@@ -1,0 +1,29 @@
+{
+  "name": "ical-proxy",
+  "version": "1.0.0",
+  "description": "Downloads a remote iCal feed and serves it locally over HTTP — designed for Outlook on Windows",
+  "main": "ical-proxy.js",
+  "bin": {
+    "ical-proxy": "./ical-proxy.js"
+  },
+  "scripts": {
+    "start": "node ical-proxy.js",
+    "help":  "node ical-proxy.js --help"
+  },
+  "engines": {
+    "node": ">=14.0.0"
+  },
+  "dependencies": {
+    "node-windows": "^1.0.0-beta.8"
+  },
+  "keywords": [
+    "ical",
+    "ics",
+    "calendar",
+    "proxy",
+    "outlook",
+    "windows",
+    "background-service"
+  ],
+  "license": "MIT"
+}
