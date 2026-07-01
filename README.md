@@ -50,6 +50,7 @@ Press `Ctrl-C` to stop the foreground server.
 | `--interval <mins>` | `30` | How often to re-fetch the remote feed |
 | `--notify` | *(on)* | Enable Windows toast notifications |
 | `--no-notify` | — | Disable Windows toast notifications |
+| `--debug` | *(off)* | Toast on startup, shutdown, and every HTTP request the local server handles |
 | `--install` | — | Install as a Windows background service |
 | `--uninstall` | — | Remove the Windows service |
 | `--help` | — | Print help and exit |
@@ -66,6 +67,9 @@ node ical-proxy.js --url https://example.com/calendar.ics
 
 # Foreground — custom port, refresh every 15 minutes
 node ical-proxy.js --url https://example.com/calendar.ics --port 9090 --interval 15
+
+# Debug mode — toast on startup, shutdown, and every HTTP request handled
+node ical-proxy.js --url https://example.com/calendar.ics --debug
 
 # URL with embedded credentials
 node ical-proxy.js --url https://user:password@example.com/private.ics
@@ -172,6 +176,25 @@ Disable all toasts with `--no-notify`:
 ```bash
 node ical-proxy.js --url https://example.com/calendar.ics --no-notify
 ```
+
+### Debug mode
+
+`--debug` adds three more toast triggers, off by default and noisy on purpose:
+
+| Event | Toast |
+|---|---|
+| Server start | **"Debug: started"** |
+| Server shutdown (`SIGINT`/`SIGTERM`) | **"Debug: shutdown"** |
+| Every HTTP request the local server handles | **"Debug: HTTP"** |
+
+```bash
+node ical-proxy.js --url https://example.com/calendar.ics --debug
+```
+
+It's a foreground diagnostic switch only — `--debug` is never written to
+`ical-proxy.config.json`, so an installed Windows service never inherits it
+and starts toasting on every Outlook poll. `--no-notify` still wins over
+`--debug` (no notifier loaded, no toasts at all).
 
 ### Toasts and the Windows service (Session 0)
 

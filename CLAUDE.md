@@ -69,7 +69,8 @@ Three levels via the `logger` object: `info`, `warn`, `error`.
 
 ### 3. Argument parser
 Minimal hand-rolled parser, no dependencies. Flags: `--url`, `--port`,
-`--interval`, `--install`, `--uninstall`, `--help`.
+`--interval`, `--notify`/`--no-notify`, `--debug`, `--install`, `--uninstall`,
+`--help`.
 
 ### 4. Config
 Three layers in priority order:
@@ -151,6 +152,18 @@ so you get exactly one toast when coming back online.
 Two state variables drive this: `lastFetchError` (for `/status`) and
 `networkDown` (a boolean latch so recovery only toasts once). Content change is
 detected by comparing `cache.body !== res.body` before overwriting.
+
+### `--debug` is a CLI-only diagnostic switch, never persisted
+`args.debug` is attached to `cfg.debug` directly in `main()`, *after*
+`resolveConfig()` returns — it deliberately never goes through `buildConfig`/
+`saveConfig`, so it's never written to `ical-proxy.config.json`. Reason: if it
+were persisted like `notify`, a Windows service installed with `--debug` would
+toast on every single HTTP request forever (including routine Outlook polling)
+with no way to see the toast (Session 0) or easily turn it off. `startServer`
+reads it once into a local `debugMode` const and toasts on: server start,
+`SIGINT`/`SIGTERM` shutdown, and every request in the `http.createServer`
+callback. Still gated by `notify()`'s own `notifyEnabled`/`notifier` checks, so
+`--no-notify` overrides `--debug`.
 
 ### Session 0 caveat
 Toasts from a service running as LocalSystem won't reach the interactive desktop.

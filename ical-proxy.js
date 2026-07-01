@@ -134,6 +134,7 @@ function parseArgs(argv = process.argv.slice(2)) {
       case '--uninstall': out.uninstall = true; break;
       case '--no-notify': out.notify    = false; break;
       case '--notify':    out.notify    = true; break;
+      case '--debug':     out.debug     = true; break;
       case '--help':
       case '-h':          out.help      = true; break;
     }
@@ -457,6 +458,7 @@ function refreshIcal(sourceUrl, done) {
 
 function startServer(cfg) {
   const intervalMs = cfg.interval * 60_000;
+  const debugMode  = cfg.debug === true;
 
   // Honour the notify setting from config/CLI, then load the module.
   notifyEnabled = cfg.notify !== false;
@@ -468,6 +470,7 @@ function startServer(cfg) {
   logger.info(`  Local port : ${cfg.port}`);
   logger.info(`  Interval   : ${cfg.interval} minute(s)`);
   logger.info(`  Toasts     : ${notifyEnabled ? (notifier ? 'enabled' : 'enabled (module missing)') : 'disabled'}`);
+  logger.info(`  Debug mode : ${debugMode ? 'on — toasting startup/shutdown/HTTP activity' : 'off'}`);
   logger.info(`  Log file   : ${LOG_FILE}`);
   logger.info(`  Disk cache : ${CACHE_FILE}`);
   logger.info('─'.repeat(58));
@@ -498,6 +501,7 @@ function startServer(cfg) {
   // ── Request handler ───────────────────────────────────────
   const server = http.createServer((req, res) => {
     logger.info(`${req.method} ${req.url}`);
+    if (debugMode) notify('Debug: HTTP', `${req.method} ${req.url} from ${req.socket.remoteAddress}`);
 
     // ── /status or /health ────────────────────────────────────
     if (req.url === '/status' || req.url === '/health') {
@@ -607,6 +611,7 @@ function startServer(cfg) {
     logger.info(`  iCal feed → http://localhost:${cfg.port}/calendar.ics`);
     logger.info(`  Status    → http://localhost:${cfg.port}/status`);
     logger.info(`  Refresh   → POST http://localhost:${cfg.port}/refresh`);
+    if (debugMode) notify('Debug: started', `Listening on http://localhost:${cfg.port}`);
   });
 
   server.on('error', (err) => {
@@ -628,6 +633,7 @@ function startServer(cfg) {
   // ── Graceful shutdown ────────────────────────────────────────
   function shutdown(sig) {
     logger.info(`${sig} received — shutting down gracefully`);
+    if (debugMode) notify('Debug: shutdown', `${sig} received — shutting down`);
     clearInterval(timer);
     server.close(() => { logger.info('Server closed. Goodbye.'); process.exit(0); });
     // Force-exit if still running after 5 s
@@ -704,6 +710,9 @@ OPTIONS
   --interval <mins>    Refresh interval in minutes      [default: 30]
   --notify             Enable Windows toast notifications   [default]
   --no-notify          Disable Windows toast notifications
+  --debug              Toast on startup, shutdown, and every HTTP
+                        request handled by the local server (foreground
+                        runs only — never saved to the service config)
   --install            Install as a Windows background service
   --uninstall          Remove the Windows service
   --help, -h           Show this help
@@ -714,6 +723,9 @@ EXAMPLES
 
   # Custom port, refresh every 15 minutes
   node ical-proxy.js --url https://example.com/feed.ics --port 9090 --interval 15
+
+  # Watch startup/shutdown/HTTP activity as toasts while debugging
+  node ical-proxy.js --url https://example.com/feed.ics --debug
 
   # Install as auto-starting Windows service (must run as Administrator)
   node ical-proxy.js --install --url https://example.com/feed.ics --port 8080 --interval 30
@@ -779,6 +791,11 @@ function main() {
     printHelp();
     process.exit(1);
   }
+
+  // --debug is a CLI-only diagnostic switch — deliberately never persisted
+  // to ical-proxy.config.json, so an installed service never inherits it
+  // and starts toasting on every request.
+  cfg.debug = args.debug === true;
 
   startServer(cfg);
 }
