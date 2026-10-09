@@ -18,8 +18,8 @@ Some iCal feed URLs (Google, Office 365, Nextcloud, etc.) require authentication
 
 ## Requirements
 
-- **Node.js** ≥ 14  (https://nodejs.org)
-- **npm install** (once, in the project folder)
+- **Bun** ≥ 1.0  (https://bun.sh)
+- **`bun install`** (once, in the project folder)
 - **Administrator rights** — only for `--install` / `--uninstall`
 
 ---
@@ -28,10 +28,10 @@ Some iCal feed URLs (Google, Office 365, Nextcloud, etc.) require authentication
 
 ```bash
 # 1. Install dependencies (one time)
-npm install
+bun install
 
 # 2. Run in the foreground to test it
-node ical-proxy.js --url https://example.com/calendar.ics
+bun ical-proxy.js --url https://example.com/calendar.ics
 
 # 3. Open Outlook and subscribe to:
 #    http://localhost:8080/calendar.ics
@@ -72,36 +72,36 @@ get a `404` listing the available ones.
 
 ```bash
 # Foreground — basic
-node ical-proxy.js --url https://example.com/calendar.ics
+bun ical-proxy.js --url https://example.com/calendar.ics
 
 # Foreground — custom port, refresh every 15 minutes
-node ical-proxy.js --url https://example.com/calendar.ics --port 9090 --interval 15
+bun ical-proxy.js --url https://example.com/calendar.ics --port 9090 --interval 15
 
 # Debug mode — toast on startup, shutdown, and every HTTP request handled
-node ical-proxy.js --url https://example.com/calendar.ics --debug
+bun ical-proxy.js --url https://example.com/calendar.ics --debug
 
 # URL with embedded credentials
-node ical-proxy.js --url https://user:password@example.com/private.ics
+bun ical-proxy.js --url https://user:password@example.com/private.ics
 
 # Two calendars, custom local filenames
-node ical-proxy.js --url1 https://example.com/work.ics    --calendar1 work.ics \
+bun ical-proxy.js --url1 https://example.com/work.ics    --calendar1 work.ics \
                     --url2 https://example.com/family.ics --calendar2 family.ics
 
 # Two calendars, default local filenames (calendar1.ics, calendar2.ics)
-node ical-proxy.js --url1 https://example.com/work.ics --url2 https://example.com/family.ics
+bun ical-proxy.js --url1 https://example.com/work.ics --url2 https://example.com/family.ics
 
 # Install as Windows service (auto-starts on boot)
 # Run this command prompt as Administrator
-node ical-proxy.js --install --url https://example.com/calendar.ics --port 8080 --interval 30
+bun ical-proxy.js --install --url https://example.com/calendar.ics --port 8080 --interval 30
 
 # Install as a service with multiple calendars
-node ical-proxy.js --install --url1 https://example.com/work.ics --calendar1 work.ics \
+bun ical-proxy.js --install --url1 https://example.com/work.ics --calendar1 work.ics \
                               --url2 https://example.com/family.ics --calendar2 family.ics \
                               --port 8080 --interval 30
 
 # Remove the Windows service
 # Run this command prompt as Administrator
-node ical-proxy.js --uninstall
+bun ical-proxy.js --uninstall
 ```
 
 ---
@@ -232,7 +232,7 @@ are logged at `INFO` level only; you'll only get a toast when the connection
 Disable all toasts with `--no-notify`:
 
 ```bash
-node ical-proxy.js --url https://example.com/calendar.ics --no-notify
+bun ical-proxy.js --url https://example.com/calendar.ics --no-notify
 ```
 
 ### Debug mode
@@ -246,7 +246,7 @@ node ical-proxy.js --url https://example.com/calendar.ics --no-notify
 | Every HTTP request the local server handles | **"Debug: HTTP"** |
 
 ```bash
-node ical-proxy.js --url https://example.com/calendar.ics --debug
+bun ical-proxy.js --url https://example.com/calendar.ics --debug
 ```
 
 It's a foreground diagnostic switch only — `--debug` is never written to
@@ -261,7 +261,7 @@ account, it lives in *Session 0* and its toasts **will not appear** on your
 desktop. This is a Windows security boundary, not a bug. Two ways to see toasts
 from the service:
 
-1. **Run in the foreground** (`node ical-proxy.js --url ...`) — toasts work normally.
+1. **Run in the foreground** (`bun ical-proxy.js --url ...`) — toasts work normally.
 2. **Run the service as your user account**: `services.msc` -> **iCal Proxy** ->
    *Properties* -> *Log On* tab -> **This account** -> enter your Windows
    credentials -> restart the service.
@@ -281,8 +281,8 @@ Open **Command Prompt as Administrator** and run:
 
 ```bat
 cd C:\path\to\ical-proxy
-npm install
-node ical-proxy.js --install --url https://example.com/calendar.ics --port 8080 --interval 30
+bun install
+bun ical-proxy.js --install --url https://example.com/calendar.ics --port 8080 --interval 30
 ```
 
 The service name is **"iCal Proxy"** and can be managed via:
@@ -295,7 +295,7 @@ The service name is **"iCal Proxy"** and can be managed via:
 Open **Command Prompt as Administrator** and run:
 
 ```bat
-node ical-proxy.js --uninstall
+bun ical-proxy.js --uninstall
 ```
 
 ### Update settings
@@ -303,8 +303,8 @@ node ical-proxy.js --uninstall
 To change the URL(s), port, or interval after installing:
 
 ```bat
-node ical-proxy.js --uninstall
-node ical-proxy.js --install --url https://new-url.com/calendar.ics --port 8080 --interval 15
+bun ical-proxy.js --uninstall
+bun ical-proxy.js --install --url https://new-url.com/calendar.ics --port 8080 --interval 15
 ```
 
 For multiple calendars, pass all `--urlN`/`--calendarN` flags again on the

@@ -7,11 +7,11 @@
     "ical-proxy": "./ical-proxy.js"
   },
   "scripts": {
-    "start": "node ical-proxy.js",
-    "help":  "node ical-proxy.js --help"
+    "start": "bun ical-proxy.js",
+    "help":  "bun ical-proxy.js --help"
   },
   "engines": {
-    "node": ">=14.0.0"
+    "bun": ">=1.0.0"
   },
   "dependencies": {
     "node-notifier": "^10.0.1",

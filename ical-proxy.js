@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 'use strict';
 
 /**
@@ -9,11 +9,11 @@
  * of the remote ones, with automatic background refreshes.
  *
  * Usage:
- *   node ical-proxy.js --url <url> [--port 8080] [--interval 30]
- *   node ical-proxy.js --url1 <url> --url2 <url> [--calendar1 name.ics] [--calendar2 name.ics]
- *   node ical-proxy.js --install  --url <url> [--port 8080] [--interval 30]
- *   node ical-proxy.js --uninstall
- *   node ical-proxy.js --help
+ *   bun ical-proxy.js --url <url> [--port 8080] [--interval 30]
+ *   bun ical-proxy.js --url1 <url> --url2 <url> [--calendar1 name.ics] [--calendar2 name.ics]
+ *   bun ical-proxy.js --install  --url <url> [--port 8080] [--interval 30]
+ *   bun ical-proxy.js --uninstall
+ *   bun ical-proxy.js --help
  */
 
 const http   = require('http');
@@ -34,7 +34,7 @@ const MAX_REDIRECTS = 5;
 const FETCH_TIMEOUT = 30_000; // ms
 
 /**
- * Node error codes that indicate a network / connectivity problem rather than
+ * Node-style error codes that indicate a network / connectivity problem rather than
  * a real application error.  These include VPN being disconnected, the remote
  * host being unreachable, or a socket timeout — all expected in a corporate
  * environment.  We treat them as INFO rather than ERROR so the log stays clean.
@@ -80,7 +80,7 @@ const logger = {
  *   When ical-proxy runs as a Windows *service* under the default LocalSystem
  *   account, it lives in Session 0 and its toasts will NOT appear on the
  *   interactive desktop. To see toasts from the service, either:
- *     (a) run it in the foreground (node ical-proxy.js --url ...), or
+ *     (a) run it in the foreground (bun ical-proxy.js --url ...), or
  *     (b) configure the service to log on as your user account
  *         (services.msc → iCal Proxy → Properties → Log On → This account).
  */
@@ -93,7 +93,7 @@ function initNotifier() {
     notifier = require('node-notifier');
   } catch (_) {
     notifier = null;
-    logger.warn('node-notifier not installed — toast notifications disabled (run: npm install)');
+    logger.warn('node-notifier not installed — toast notifications disabled (run: bun install)');
   }
 }
 
@@ -736,13 +736,18 @@ function makeService() {
   try {
     ({ Service } = require('node-windows'));
   } catch (e) {
-    logger.error('node-windows not found — run:  npm install');
+    logger.error('node-windows not found — run:  bun install');
     process.exit(1);
   }
   return new Service({
     name:        APP_NAME,
     description: 'Downloads remote iCal feed(s) and serves them locally for Outlook.',
     script:      path.resolve(__dirname, 'ical-proxy.js'),
+    // Run the service under Bun. --install is run with bun, so process.execPath
+    // is bun.exe. node-windows defaults nodeOptions to '--harmony', which Bun
+    // doesn't understand — an empty array overrides it.
+    execPath:    process.execPath,
+    nodeOptions: [],
     // No extra args: on start the service reads from ical-proxy.config.json
   });
 }
@@ -760,7 +765,7 @@ function installService(cfg) {
     cfg.calendars.forEach(c => {
       logger.info(`Add this URL to Outlook → http://localhost:${cfg.port}/${c.localName}`);
     });
-    logger.info('To check status run:  node ical-proxy.js --status');
+    logger.info('To check status run:  bun ical-proxy.js --status');
   });
   svc.on('alreadyinstalled', () => {
     logger.warn('Service is already installed.');
@@ -790,7 +795,7 @@ function printHelp() {
 ╚══════════════════════════════════════════════════════════════╝
 
 USAGE
-  node ical-proxy.js [OPTIONS]
+  bun ical-proxy.js [OPTIONS]
 
 OPTIONS
   --url <url>          Remote iCal / .ics feed URL      [required*]
@@ -812,26 +817,26 @@ OPTIONS
 
 EXAMPLES
   # Run interactively (Ctrl-C to stop) — single calendar, any path works
-  node ical-proxy.js --url https://example.com/feed.ics
+  bun ical-proxy.js --url https://example.com/feed.ics
 
   # Custom port, refresh every 15 minutes
-  node ical-proxy.js --url https://example.com/feed.ics --port 9090 --interval 15
+  bun ical-proxy.js --url https://example.com/feed.ics --port 9090 --interval 15
 
   # Watch startup/shutdown/HTTP activity as toasts while debugging
-  node ical-proxy.js --url https://example.com/feed.ics --debug
+  bun ical-proxy.js --url https://example.com/feed.ics --debug
 
   # Multiple calendars, each served at its own filename
-  node ical-proxy.js --url1 https://example.com/work.ics --calendar1 work.ics \\
+  bun ical-proxy.js --url1 https://example.com/work.ics --calendar1 work.ics \\
                       --url2 https://example.com/family.ics --calendar2 family.ics
 
   # Multiple calendars, default filenames (calendar1.ics, calendar2.ics)
-  node ical-proxy.js --url1 https://example.com/work.ics --url2 https://example.com/family.ics
+  bun ical-proxy.js --url1 https://example.com/work.ics --url2 https://example.com/family.ics
 
   # Install as auto-starting Windows service (must run as Administrator)
-  node ical-proxy.js --install --url https://example.com/feed.ics --port 8080 --interval 30
+  bun ical-proxy.js --install --url https://example.com/feed.ics --port 8080 --interval 30
 
   # Remove the service
-  node ical-proxy.js --uninstall
+  bun ical-proxy.js --uninstall
 
 ENDPOINTS (once running)
   GET  http://localhost:8080/calendar1.ics   ← paste this into Outlook

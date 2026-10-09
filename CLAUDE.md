@@ -44,20 +44,20 @@ daemon/                    # Created by node-windows during --install
 ## Running locally
 
 ```bash
-npm install
-node ical-proxy.js --url https://example.com/calendar.ics
-node ical-proxy.js --url https://example.com/calendar.ics --port 9090 --interval 15
-node ical-proxy.js --url1 https://example.com/work.ics --calendar1 work.ics \
+bun install
+bun ical-proxy.js --url https://example.com/calendar.ics
+bun ical-proxy.js --url https://example.com/calendar.ics --port 9090 --interval 15
+bun ical-proxy.js --url1 https://example.com/work.ics --calendar1 work.ics \
                     --url2 https://example.com/family.ics --calendar2 family.ics
-node ical-proxy.js --help
+bun ical-proxy.js --help
 ```
 
 ## Windows service
 
 ```bat
 # Must be run as Administrator
-node ical-proxy.js --install --url https://example.com/calendar.ics --port 8080
-node ical-proxy.js --uninstall
+bun ical-proxy.js --install --url https://example.com/calendar.ics --port 8080
+bun ical-proxy.js --uninstall
 ```
 
 Service name in Windows SCM: **"iCal Proxy"**
@@ -314,5 +314,5 @@ entry point.
 | `node-windows` | Install/uninstall/start/stop as a Windows SCM service |
 | `node-notifier` | Native Windows toast notifications (bundles SnoreToast) — loaded lazily, optional |
 
-Everything else (HTTP, HTTPS, fs, path, os, url) is Node built-in.
-Minimum Node version: **14.0.0** (uses optional chaining `?.` and numeric separators `_`).
+Everything else (HTTP, HTTPS, fs, path, os, url) uses Node-compatible built-ins that Bun provides.
+Runtime: **Bun ≥ 1.0** (runs the CommonJS `require` code as-is, no build step).
