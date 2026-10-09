@@ -148,7 +148,9 @@ Endpoints:
 ### 8. Windows service helpers
 `makeService()` / `installService(cfg)` / `uninstallService()` — thin wrappers
 around `node-windows`. The service script path is always `__dirname/ical-proxy.js`
-with no extra arguments; it boots from `ical-proxy.config.json`.
+with no extra arguments; it boots from `ical-proxy.config.json`. `makeService`
+also sets `execPath`, `nodeOptions` and `env` — see "Service runs under Bun,
+with the installer's CA bundle forwarded" below.
 
 ---
 
@@ -265,6 +267,38 @@ function checks for `CONFIG_FILE` existence when `process.argv.length <= 2` and
 proceeds to `startServer` if found. Avoids the need for a separate service-runner
 entry point.
 
+### Service runs under Bun, with the installer's CA bundle forwarded
+`makeService()` passes three things to `node-windows` beyond name/script:
+
+- `execPath: process.execPath` — `--install` is run with `bun`, so the service
+  launches that same `bun.exe` (the generated `daemon/icalproxy.xml` has
+  `<executable>…\bun.exe</executable>` + `wrapper.js`). Moving/upgrading Bun to
+  a new path requires `--uninstall` then `--install` again. A Bun under the user
+  profile must be readable by the service account (LocalSystem by default).
+- `nodeOptions: []` — `node-windows` defaults this to `--harmony`, which Bun
+  doesn't accept; an empty array overrides the default.
+- `env: [{ name: 'NODE_EXTRA_CA_CERTS', … }]` — a LocalSystem service does **not**
+  inherit the installing user's environment. On this machine (Thales/Zscaler TLS
+  interception) fetches from the service failed with
+  `UNABLE_TO_VERIFY_LEAF_SIGNATURE` until the installer's `NODE_EXTRA_CA_CERTS`
+  was written into the service config. It's read from `process.env` at
+  `--install` time, stripped of surrounding quotes, and only forwarded if the
+  file exists (otherwise a warning is logged and nothing is forwarded). If it's
+  unset in the installing shell the service gets no CA bundle.
+
+Gotchas:
+- A `NODE_EXTRA_CA_CERTS` value stored **with literal quotes** (e.g.
+  `"C:\…\thales.pembundle"`) makes Bun report "load failed: No such file or
+  directory" even though the file exists; Node tolerates it by falling back to
+  the system cert store. Keep the Windows env var unquoted.
+- Changes to the service env/exec options only take effect after
+  `--uninstall` + `--install` (run from an elevated terminal, in a *new* shell so
+  the corrected variable is picked up). Bun runs on a *different* cert store than
+  Node, so "Node works, Bun doesn't" on TLS usually means the CA bundle isn't
+  reaching Bun.
+- `--install` needs `--url`/`--urlN`; without one it falls back to the saved
+  config and does not install anything.
+
 ---
 
 ## What NOT to change without understanding the impact
@@ -284,6 +318,9 @@ entry point.
 - The `calendars.length === 1` catch-all fallback in the request handler —
   removing it breaks existing Outlook subscriptions on upgrade (see "Legacy
   single-calendar routing is preserved deliberately")
+- `execPath` / `nodeOptions: []` / `env` in `makeService()` — removing them makes
+  the service start with the wrong flags (`--harmony`) or without the CA bundle,
+  and fetches fail behind the corporate TLS proxy (see "Service runs under Bun…")
 - `CONNECTIVITY_ERRORS` — check the Node.js docs before adding/removing codes;
   `ECONNRESET` in particular can be both a connectivity issue and a server bug
 
