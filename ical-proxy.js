@@ -739,10 +739,25 @@ function makeService() {
     logger.error('node-windows not found — run:  bun install');
     process.exit(1);
   }
+  // A LocalSystem service doesn't inherit the installing user's environment, so
+  // behind a TLS-intercepting proxy (e.g. Zscaler) it would fail with
+  // UNABLE_TO_VERIFY_LEAF_SIGNATURE. Forward the installer's extra-CA bundle
+  // into the service. Quotes are stripped because a value stored with literal
+  // quotes makes Bun look for a file whose name includes them.
+  const env = [];
+  const caBundle = (process.env.NODE_EXTRA_CA_CERTS || '').replace(/^"|"$/g, '').trim();
+  if (caBundle) {
+    if (fs.existsSync(caBundle)) {
+      env.push({ name: 'NODE_EXTRA_CA_CERTS', value: caBundle });
+    } else {
+      logger.warn(`NODE_EXTRA_CA_CERTS file not found (${caBundle}) — not forwarding to the service`);
+    }
+  }
   return new Service({
     name:        APP_NAME,
     description: 'Downloads remote iCal feed(s) and serves them locally for Outlook.',
     script:      path.resolve(__dirname, 'ical-proxy.js'),
+    env,
     // Run the service under Bun. --install is run with bun, so process.execPath
     // is bun.exe. node-windows defaults nodeOptions to '--harmony', which Bun
     // doesn't understand — an empty array overrides it.
