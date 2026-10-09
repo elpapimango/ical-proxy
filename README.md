@@ -285,6 +285,13 @@ bun install
 bun ical-proxy.js --install --url https://example.com/calendar.ics --port 8080 --interval 30
 ```
 
+The service runs under **Bun**: `--install` registers whichever `bun.exe`
+you ran the command with (`process.execPath`), so install with the same Bun
+you want the service to use. If you later move or upgrade Bun to a different
+path, `--uninstall` and `--install` again. Make sure the account the service
+runs as can read that `bun.exe` (a path under your user profile may not be
+reachable from LocalSystem).
+
 The service name is **"iCal Proxy"** and can be managed via:
 - **Services** app (`services.msc`)
 - **Task Manager → Services** tab
@@ -394,6 +401,7 @@ If the source URL needs OAuth or Bearer tokens rather than basic auth, fetch the
 ical-proxy/
 ├── ical-proxy.js           # Main application (single file)
 ├── package.json            # Deps: node-windows (service) + node-notifier (toasts)
+├── bun.lock                # Bun lockfile
 ├── README.md
 ├── CLAUDE.md               # Context file for Claude Code
 ├── ical-proxy.config.json  # Auto-generated on first run with --url/--urlN or --install
